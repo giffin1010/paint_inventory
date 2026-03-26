@@ -6,7 +6,7 @@ import { Label } from './components/ui/label'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './components/ui/dialog'
 import { Trash2, Plus, Search, PaintBucket } from 'lucide-react'
 
-import { db } from './firebase'
+import { db, auth } from './firebase'
 import {
   collection,
   addDoc,
@@ -15,6 +15,11 @@ import {
   updateDoc,
   deleteDoc,
 } from 'firebase/firestore'
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
+} from 'firebase/auth'
 
 const BRANDS = ['Sherwin-Williams', 'Benjamin Moore', 'Other']
 const FINISHES = ['Flat', 'Satin', 'Eggshell', 'Semi-Gloss', 'Other']
@@ -65,7 +70,87 @@ function PrimLogo() {
   )
 }
 
+function AuthScreen() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
+
+    try {
+      await signInWithEmailAndPassword(auth, email.trim(), password)
+    } catch (err) {
+      setError(err.message || 'Something went wrong.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-neutral-100 p-4">
+      <div className="mx-auto max-w-md pt-10">
+        <Card className="rounded-3xl shadow-xl">
+          <CardContent className="space-y-5 p-6">
+            <div className="space-y-2">
+              <PrimLogo />
+              <div>
+                <h1 className="text-2xl font-bold">Paint Inventory</h1>
+                <p className="text-sm text-neutral-500">
+                  Sign in to access the team inventory.
+                </p>
+              </div>
+            </div>
+
+            <form className="space-y-3" onSubmit={handleSubmit}>
+              <div className="grid gap-2">
+                <Label>Email</Label>
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@company.com"
+                  className="h-12 rounded-xl"
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label>Password</Label>
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password"
+                  className="h-12 rounded-xl"
+                />
+              </div>
+
+              {error ? (
+                <div className="rounded-xl bg-red-50 p-3 text-sm text-red-700">
+                  {error}
+                </div>
+              ) : null}
+
+              <Button type="submit" className="h-12 w-full rounded-xl" disabled={loading}>
+                {loading ? 'Please wait...' : 'Sign In'}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+   
+
 export default function PaintInventoryApp() {
+  const [user, setUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+
   const [items, setItems] = useState([])
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
@@ -76,6 +161,19 @@ export default function PaintInventoryApp() {
   const nameInputRef = useRef(null)
 
   useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser)
+      setAuthLoading(false)
+    })
+    return () => unsub()
+  }, [])
+
+  useEffect(() => {
+    if (!user) {
+      setItems([])
+      return
+    }
+
     const unsubscribe = onSnapshot(collection(db, 'paints'), (snapshot) => {
       const syncedItems = snapshot.docs.map((docSnap) => ({
         id: docSnap.id,
@@ -87,7 +185,7 @@ export default function PaintInventoryApp() {
     })
 
     return () => unsubscribe()
-  }, [])
+  }, [user])
 
   useEffect(() => {
     if (open) {
@@ -217,6 +315,22 @@ export default function PaintInventoryApp() {
     await deleteDoc(doc(db, 'paints', id))
   }
 
+  async function handleSignOut() {
+    await signOut(auth)
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-neutral-100 p-6">
+        <div className="mx-auto max-w-md pt-10 text-center text-neutral-600">Loading...</div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <AuthScreen />
+  }
+
   return (
     <div className="min-h-screen bg-neutral-100 px-2 py-2 sm:p-6">
       <div className="mx-auto w-full max-w-5xl">
@@ -228,145 +342,152 @@ export default function PaintInventoryApp() {
                 <div>
                   <h1 className="text-lg font-bold tracking-tight sm:text-3xl">Paint Inventory</h1>
                   <p className="text-sm text-neutral-500">Leftover paint tracking for the shop.</p>
+                  <p className="mt-1 text-xs text-neutral-500">{user.email}</p>
                 </div>
               </div>
 
-              <Dialog open={open} onOpenChange={handleDialogChange}>
-                <DialogTrigger asChild>
-                  <Button className="h-12 w-full rounded-2xl px-5 text-base shadow-sm sm:w-auto">
-                    <Plus className="mr-2 h-4 w-4" />
-                    Add Paint
-                  </Button>
-                </DialogTrigger>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button variant="outline" className="h-12 rounded-2xl px-5 text-base" onClick={handleSignOut}>
+                  Sign Out
+                </Button>
 
-                <DialogContent className="max-h-[92vh] w-[calc(100vw-1rem)] max-w-lg overflow-y-auto rounded-3xl p-4 sm:w-[calc(100vw-1.5rem)] sm:p-6">
-                  <DialogHeader>
-                    <DialogTitle>{editingId !== null ? 'Edit Paint' : 'Add Paint'}</DialogTitle>
-                  </DialogHeader>
-
-                  <form
-                    className="grid gap-4 pt-2"
-                    onSubmit={(e) => {
-                      e.preventDefault()
-                      handleSaveItem()
-                    }}
-                  >
-                    <div className="grid gap-2">
-                      <Label>Color Name</Label>
-                      <Input
-                        ref={nameInputRef}
-                        value={form.name}
-                        onChange={(e) => setForm({ ...form, name: e.target.value })}
-                        placeholder="Ex: Pure White"
-                        className="h-12 rounded-xl text-base"
-                      />
-                    </div>
-
-                    <div className="grid gap-2">
-                      <Label>Brand</Label>
-                      <OptionPills
-                        options={BRANDS}
-                        value={form.brand}
-                        onChange={(value) => handleImmediateEdit({ brand: value })}
-                      />
-                      {form.brand === 'Other' ? (
-                        <Input
-                          value={form.customBrand}
-                          onChange={(e) => setForm({ ...form, customBrand: e.target.value })}
-                          placeholder="Enter brand"
-                          className="h-12 rounded-xl text-base"
-                        />
-                      ) : null}
-                    </div>
-
-                    <div className="grid gap-2">
-                      <Label>Product</Label>
-                      <Input
-                        value={form.product}
-                        onChange={(e) => setForm({ ...form, product: e.target.value })}
-                        placeholder="Ex: Duration Home"
-                        className="h-12 rounded-xl text-base"
-                      />
-                    </div>
-
-                    <div className="grid gap-2">
-                      <Label>Finish</Label>
-                      <OptionPills
-                        options={FINISHES}
-                        value={form.finish}
-                        onChange={(value) =>
-                          handleImmediateEdit({
-                            finish: value,
-                            customFinish: value === 'Other' ? form.customFinish : '',
-                          })
-                        }
-                      />
-                      {form.finish === 'Other' ? (
-                        <Input
-                          value={form.customFinish}
-                          onChange={(e) => setForm({ ...form, customFinish: e.target.value })}
-                          placeholder="Enter finish"
-                          className="h-12 rounded-xl text-base"
-                        />
-                      ) : null}
-                    </div>
-
-                    <div className="grid gap-2">
-                      <Label>Amount Left</Label>
-                      <OptionPills
-                        options={AMOUNTS}
-                        value={form.amount}
-                        onChange={(value) =>
-                          handleImmediateEdit({
-                            amount: value,
-                            customAmount: value === 'Other' ? form.customAmount : '',
-                          })
-                        }
-                      />
-                      {form.amount === 'Other' ? (
-                        <Input
-                          value={form.customAmount}
-                          onChange={(e) => setForm({ ...form, customAmount: e.target.value })}
-                          placeholder="Enter amount"
-                          className="h-12 rounded-xl text-base"
-                        />
-                      ) : null}
-                    </div>
-
-                    <div className="grid gap-2">
-                      <Label>Category</Label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleImmediateEdit({ area: 'interior' })}
-                          className={`min-h-12 rounded-xl border px-4 py-3 text-sm font-medium transition-colors ${
-                            form.area === 'interior'
-                              ? 'border-black bg-black text-white'
-                              : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-100 active:bg-neutral-200'
-                          }`}
-                        >
-                          Interior
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleImmediateEdit({ area: 'exterior' })}
-                          className={`min-h-12 rounded-xl border px-4 py-3 text-sm font-medium transition-colors ${
-                            form.area === 'exterior'
-                              ? 'border-black bg-black text-white'
-                              : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-100 active:bg-neutral-200'
-                          }`}
-                        >
-                          Exterior
-                        </button>
-                      </div>
-                    </div>
-
-                    <Button type="submit" className="h-12 rounded-2xl text-base">
-                      {editingId !== null ? 'Update Paint' : 'Save Paint'}
+                <Dialog open={open} onOpenChange={handleDialogChange}>
+                  <DialogTrigger asChild>
+                    <Button className="h-12 rounded-2xl px-5 text-base shadow-sm">
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Paint
                     </Button>
-                  </form>
-                </DialogContent>
-              </Dialog>
+                  </DialogTrigger>
+
+                  <DialogContent className="max-h-[92vh] w-[calc(100vw-1rem)] max-w-lg overflow-y-auto rounded-3xl p-4 sm:w-[calc(100vw-1.5rem)] sm:p-6">
+                    <DialogHeader>
+                      <DialogTitle>{editingId !== null ? 'Edit Paint' : 'Add Paint'}</DialogTitle>
+                    </DialogHeader>
+
+                    <form
+                      className="grid gap-4 pt-2"
+                      onSubmit={(e) => {
+                        e.preventDefault()
+                        handleSaveItem()
+                      }}
+                    >
+                      <div className="grid gap-2">
+                        <Label>Color Name</Label>
+                        <Input
+                          ref={nameInputRef}
+                          value={form.name}
+                          onChange={(e) => setForm({ ...form, name: e.target.value })}
+                          placeholder="Ex: Pure White"
+                          className="h-12 rounded-xl text-base"
+                        />
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label>Brand</Label>
+                        <OptionPills
+                          options={BRANDS}
+                          value={form.brand}
+                          onChange={(value) => handleImmediateEdit({ brand: value })}
+                        />
+                        {form.brand === 'Other' ? (
+                          <Input
+                            value={form.customBrand}
+                            onChange={(e) => setForm({ ...form, customBrand: e.target.value })}
+                            placeholder="Enter brand"
+                            className="h-12 rounded-xl text-base"
+                          />
+                        ) : null}
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label>Product</Label>
+                        <Input
+                          value={form.product}
+                          onChange={(e) => setForm({ ...form, product: e.target.value })}
+                          placeholder="Ex: Duration Home"
+                          className="h-12 rounded-xl text-base"
+                        />
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label>Finish</Label>
+                        <OptionPills
+                          options={FINISHES}
+                          value={form.finish}
+                          onChange={(value) =>
+                            handleImmediateEdit({
+                              finish: value,
+                              customFinish: value === 'Other' ? form.customFinish : '',
+                            })
+                          }
+                        />
+                        {form.finish === 'Other' ? (
+                          <Input
+                            value={form.customFinish}
+                            onChange={(e) => setForm({ ...form, customFinish: e.target.value })}
+                            placeholder="Enter finish"
+                            className="h-12 rounded-xl text-base"
+                          />
+                        ) : null}
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label>Amount Left</Label>
+                        <OptionPills
+                          options={AMOUNTS}
+                          value={form.amount}
+                          onChange={(value) =>
+                            handleImmediateEdit({
+                              amount: value,
+                              customAmount: value === 'Other' ? form.customAmount : '',
+                            })
+                          }
+                        />
+                        {form.amount === 'Other' ? (
+                          <Input
+                            value={form.customAmount}
+                            onChange={(e) => setForm({ ...form, customAmount: e.target.value })}
+                            placeholder="Enter amount"
+                            className="h-12 rounded-xl text-base"
+                          />
+                        ) : null}
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label>Category</Label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleImmediateEdit({ area: 'interior' })}
+                            className={`min-h-12 rounded-xl border px-4 py-3 text-sm font-medium transition-colors ${
+                              form.area === 'interior'
+                                ? 'border-black bg-black text-white'
+                                : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-100 active:bg-neutral-200'
+                            }`}
+                          >
+                            Interior
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleImmediateEdit({ area: 'exterior' })}
+                            className={`min-h-12 rounded-xl border px-4 py-3 text-sm font-medium transition-colors ${
+                              form.area === 'exterior'
+                                ? 'border-black bg-black text-white'
+                                : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-100 active:bg-neutral-200'
+                            }`}
+                          >
+                            Exterior
+                          </button>
+                        </div>
+                      </div>
+
+                      <Button type="submit" className="h-12 rounded-2xl text-base">
+                        {editingId !== null ? 'Update Paint' : 'Save Paint'}
+                      </Button>
+                    </form>
+                  </DialogContent>
+                </Dialog>
+              </div>
             </div>
           </div>
 
